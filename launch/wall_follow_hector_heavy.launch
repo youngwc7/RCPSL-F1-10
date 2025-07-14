@@ -25,8 +25,7 @@
 	<param name="kp" value="100.0" />
         <param name="ki" value="1.0" />
         <param name="kd" value="5.0" />
-	<param name="down_sample" value="4" /> 
-   </node>
+    </node>
 
     <!-- Hector SLAM (no odometry) -->
         <node pkg="hector_mapping" type="hector_mapping" name="hector_mapping" output="screen" launch-prefix="bash -c 'sleep 5; $0 $@'">
@@ -65,24 +64,30 @@
 <!--
   <node pkg="initial" type="telemetry.py" name="cmd_to_telemetry" output="screen" launch-prefix="bash -c 'sleep 10; $0 $@'"/>
 -->
+  <node pkg="initial" type="telemetry.py" name="cmd_to_telemetry" output="screen" launch-prefix="bash -c 'sleep 10; $0 $@'"/>
 
   <!-- telemetry node -->
 <!--
   <node pkg="initial" type="odometry.py" name="telemetry_to_odom" output="screen" launch-prefix="bash -c 'sleep 10; $0 $@'"/>
 -->
+  <node pkg="initial" type="odometry.py" name="telemetry_to_odom" output="screen" launch-prefix="bash -c 'sleep 10; $0 $@'"/>
 
 <!--
   <rosparam command="load" file="$(find initial)/config/ekf.yaml" />
 -->
+  <rosparam command="load" file="$(find initial)/config/ekf.yaml" />
 
 <!--
   <node pkg="robot_localization" type="ekf_localization_node" name="ekf_localization_node" output="screen"/>
 -->
+  <node pkg="robot_localization" type="ekf_localization_node" name="ekf_localization_node" output="screen"/>
 
 <!--
   <node pkg="initial" type="localization.py" name="ekf_localization" output="screen"
       launch-prefix="bash -c 'sleep 5; $0 $@'" />
 -->
+  <node pkg="initial" type="localization.py" name="ekf_localization" output="screen"
+      launch-prefix="bash -c 'sleep 5; $0 $@'" />
 
 <!-- RViz for visualization -->
     <!--

@@ -27,7 +27,7 @@ class CmdVelToVesc:
         return max(min(val, max_val), min_val)
 
     def cmd_vel_callback(self, msg):
-        duty = self.clamp(msg.linear.x * 0.2, -0.2, 0.2)
+        duty = self.clamp(msg.linear.x * 0.25, -0.2, 0.2)
         
         # Incremental steering control
         #step = 0.05
