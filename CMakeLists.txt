@@ -13,11 +13,16 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   geometry_msgs
   vesc_msgs
+  nav_msgs
+  cv_bridge
 )
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
-
+set(OpenCV_DIR "/usr/lib/aarch64-linux-gnu/cmake/opencv4")
+find_package(OpenCV 4.2 REQUIRED)
+find_package(CGAL REQUIRED)
+message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -109,6 +114,7 @@ catkin_package(
 #  LIBRARIES initial
 #  CATKIN_DEPENDS roscpp rospy std_msgs
 #  DEPENDS system_lib
+	CATKIN_DEPENDS roscpp nav_msgs geometry_msgs cv_bridge
 )
 
 ###########
@@ -118,8 +124,10 @@ catkin_package(
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 include_directories(
-# include
+  include
   ${catkin_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CGAL_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -136,6 +144,7 @@ include_directories(
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
 # add_executable(${PROJECT_NAME}_node src/initial_node.cpp)
+add_executable(geometry_path_node src/geometry_path_node.cpp src/geometry_path.cpp) 
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -152,6 +161,11 @@ include_directories(
 #   ${catkin_LIBRARIES}
 # )
 
+target_link_libraries(geometry_path_node
+	${catkin_LIBRARIES}
+	${OpenCV_LIBRARIES}
+	${CGAL_LIBRARIES}
+	)
 #############
 ## Install ##
 #############
