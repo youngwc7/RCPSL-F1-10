@@ -6,6 +6,9 @@
 
 using namespace initial;
 
+constexpr double MIN_AREA_THRESH = 1.0;
+
+
 GeometryPath::GeometryPath(ros::NodeHandle& nh)
 {
 	ros::NodeHandle privateNodeHandle("~");
@@ -14,6 +17,7 @@ GeometryPath::GeometryPath(ros::NodeHandle& nh)
 	
 	mapSub = nh.subscribe("map", 1, &GeometryPath::MapCallback, this);
 	pathPub = nh.advertise<nav_msgs::Path>("geometry_path", 1, true);
+	path2Pub = nh.advertise<nav_msgs::Path>("inner_geometry_path", 1, true);
 }
 
 void GeometryPath::MapCallback(const nav_msgs::OccupancyGrid::ConstPtr& msg)
@@ -40,54 +44,59 @@ void GeometryPath::MapCallback(const nav_msgs::OccupancyGrid::ConstPtr& msg)
 	    }
 	}
 	
+	/* inflate obstacles */
+	cv::Mat inflatedMask = (binMap == 0);
+	cv::Mat inflatedMap;
+	double inflate = 0.18;
+	double res = msg->info.resolution;
+	int inflatePx = static_cast<int>(inflate / res + 0.5);
+	
+	cv::Mat k = cv::getStructuringElement(cv::MORPH_ELLIPSE, 
+							cv::Size(2 * inflatePx + 1, 2 * inflatePx + 1),
+							cv::Point(inflatePx, inflatePx)
+							);
+	cv::dilate(inflatedMask, inflatedMap, k);
+	binMap.setTo(0, inflatedMap);
+	
 	/* Find largest contour */
-	std::vector<std::vector<cv::Point> > contours;
-	int maxContourIndex = -1;
+	std::vector<std::vector<cv::Point> > outerContours, innerContours;
+	int innerMaxContourIndex, outerMaxContourIndex = -1;
 	
-	if (!FindContours(contours, binMap, maxContourIndex)) return;
-	
-	// std::vector<cv::Point> simplified;
-	// cv::approxPolyDP(maxContour, simplified, 2.0, true);
-	// if (cv::contourArea(simplified) < 1e-4)
-	// {
-	// 	ROS_INFO("CONTOUR TINY!");;
-	// 	return;
-	// }
+	if (!FindContours(outerContours, innerContours, binMap, outerMaxContourIndex, innerMaxContourIndex)) return;
 	
 	/* Build polygon from contour */
-	Poly2 outerPoly;
-	std::vector<Poly2> holes;
+	Poly2 outerPoly, hole;
 	
-	if (!BuildCGALPoly(outerPoly, holes, msg, contours, maxContourIndex)) return;
-	
-	/* create skeleton */
-	// SCGAL_Ptr ss = CGAL::create_interior_straight_skeleton_2(poly.vertices_begin(), poly.vertices_end());
-	// if (!ss) return;
-	
-	// BuildSkeleton(ss, vertices);
-	// std::vector<Point2> vertices = ExtractLongestSkeletonPath(ss);
-	
-	
+	if (!BuildCGALPoly(outerPoly, hole, msg, outerContours, innerContours, outerMaxContourIndex, innerMaxContourIndex)) 
+		return;
+		
 	ROS_INFO("OUTER POLY: %zu vertices. First: (%.2f, %.2f)", outerPoly.size(), outerPoly[0].x(), outerPoly[0].y());
+	ROS_INFO("INNER POLY: %zu vertices, First: (%.2f, %.2f)", hole.size(), hole[0].x(), hole[0].y());
 	/* Generate path */
-	std::vector<Point2> pathWaypoints;
+	std::vector<Point2> outerLinePoints, innerLinePoints;
 	
-	BuildCDTPath(pathWaypoints, outerPoly, holes);
-	if (pathWaypoints.empty())
+	BuildCenterline(outerLinePoints, innerLinePoints, outerPoly, hole, innerMaxContourIndex);
+	if (outerLinePoints.empty())
 	{
-		ROS_INFO("no path!");
+		ROS_INFO("outer line no path main");
+		return;
+	}
+	else if(innerLinePoints.empty())
+	{
+		ROS_INFO("inner line no path main");
 		return;
 	}
 	
 	/* Publish Path msg */
-	nav_msgs::Path path;
-	path.header.stamp = ros::Time::now();
-	path.header.frame_id = "map";
+	nav_msgs::Path outerPath, innerPath;
+	outerPath.header.stamp = ros::Time::now();
+	outerPath.header.frame_id = innerPath.header.frame_id = "map";
+	innerPath.header.stamp = ros::Time::now();
 	
-	for (auto &p : pathWaypoints)
+	for (auto &p : outerLinePoints)
 	{
 		geometry_msgs::PoseStamped poseStamped;
-		poseStamped.header = path.header;
+		poseStamped.header = outerPath.header;
 		poseStamped.pose.position.x = p.x();
 		poseStamped.pose.position.y = p.y();
 		poseStamped.pose.position.z = 0.0;
@@ -96,295 +105,249 @@ void GeometryPath::MapCallback(const nav_msgs::OccupancyGrid::ConstPtr& msg)
 		poseStamped.pose.orientation.y = 0.0;
 		poseStamped.pose.orientation.z = 0.0;
 		poseStamped.pose.orientation.w = 1.0;
-		path.poses.push_back(poseStamped);
+		outerPath.poses.push_back(poseStamped);
 	}
 	
-	pathPub.publish(path);
+	for (auto &p : innerLinePoints)
+	{
+		geometry_msgs::PoseStamped poseStamped;
+		poseStamped.header = innerPath.header;
+		poseStamped.pose.position.x = p.x();
+		poseStamped.pose.position.y = p.y();
+		poseStamped.pose.position.z = 0.0;
+		
+		poseStamped.pose.orientation.x = 0.0;
+		poseStamped.pose.orientation.y = 0.0;
+		poseStamped.pose.orientation.z = 0.0;
+		poseStamped.pose.orientation.w = 1.0;
+		innerPath.poses.push_back(poseStamped);
+	}
+	
+	pathPub.publish(outerPath);
+	path2Pub.publish(innerPath);
 }
 
-bool GeometryPath::FindContours(std::vector<std::vector<cv::Point> >& contours, const cv::Mat& binMap, int& maxContourIndex)
+bool GeometryPath::FindContours(std::vector<std::vector<cv::Point> >& outerContours, std::vector<std::vector<cv::Point> >& innerContours, const cv::Mat& binMap, int& outerMaxContourIndex, int& innerMaxContourIndex)
 {
+	std::vector<std::vector<cv::Point> > allContours;
+	std::vector<cv::Vec4i> hierarchy;
+	
 	if (binMap.empty())
 	{
 		ROS_INFO("empty bin map in maxContour");
 		return false;
 	}
 	
-	cv::findContours(binMap, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-	if (contours.empty()) 
+	/* Extract CONTOURS */
+	cv::findContours(binMap, allContours, hierarchy, cv::RETR_CCOMP, cv::CHAIN_APPROX_SIMPLE);
+	if (allContours.empty()) 
 	{
 		ROS_INFO ("NO CONTOURS!"); 
 		return false;
 	}
 	
-	auto maxContourIt = std::max_element(contours.begin(), contours.end(),
-				[](const auto& a, const auto& b) 
-				{ return std::fabs(cv::contourArea(a)) < std::fabs(cv::contourArea(b)); });
+	outerContours.clear();
+	innerContours.clear();
 	
-	maxContourIndex = static_cast<int>(maxContourIt - contours.begin());
+	/* CLASSIFY OUTER CONTOURS */
+	double outerMaxArea, innerMaxArea;
+	int maxOuterIdx, maxInnerIdx, outerIdx, innerIdx;
+	int size = static_cast<int>(allContours.size());
+	
+	maxOuterIdx = maxInnerIdx = innerIdx = outerIdx = -1;
+	outerMaxArea = innerMaxArea = 0.0;
+	for (int i = 0; i < size; ++i)
+	{
+		int h = hierarchy[i][3];
+		// != -1 -> holes (inner walls)
+		if (h != -1) 
+		{
+			double tmpInnerArea = std::fabs(cv::contourArea(allContours[i]));
+			innerContours.push_back(allContours[i]);
+			++innerIdx;
+			
+			if (tmpInnerArea > innerMaxArea) 
+			{
+				innerMaxArea = tmpInnerArea;
+				maxInnerIdx = innerIdx; 
+			}
+			
+			continue;
+		}
+		
+		else
+		{
+			double tmpOuterArea = std::fabs(cv::contourArea(allContours[i]));
+			outerContours.push_back(allContours[i]);
+			++outerIdx;
+			
+			if (tmpOuterArea > outerMaxArea)
+			{
+				outerMaxArea = tmpOuterArea;
+				maxOuterIdx = outerIdx;
+			}
+		}
+		
+	}
+	
+	// Inner contour or outer contour failed. 
+	if (innerIdx < 0 || outerIdx < 0) 
+	{
+		ROS_INFO("ILLEGAL CONTOURS: INNER: %d, OUTER: %d", innerIdx, outerIdx);
+		return false;
+	}
+	
+	outerMaxContourIndex = maxOuterIdx;
+	innerMaxContourIndex = maxInnerIdx;
 	return true;
 }
 	
-bool GeometryPath::BuildCGALPoly(Poly2& outer, std::vector<Poly2>& holes, const nav_msgs::OccupancyGrid::ConstPtr& msg, const std::vector<std::vector<cv::Point> >& contours, int maxContourIndex)
+bool GeometryPath::BuildCGALPoly(Poly2& outer, Poly2& hole, const nav_msgs::OccupancyGrid::ConstPtr& msg, 
+	const std::vector<std::vector<cv::Point> >& outerContours, const std::vector<std::vector<cv::Point> >& innerContours, 
+	int outerMaxContourIndex, int innerMaxContourIndex)
 {
 	double res = msg->info.resolution;
 	double origX = msg->info.origin.position.x;
 	double origY = msg->info.origin.position.y;
 	
 	outer.clear();
-	holes.clear();
+	hole.clear();
 	
 	int contourIndex = 0;
 	
-	for (const auto& contour : contours) 
+	/* Draw outer wall polygon */
+	const auto& outerWallContour = outerContours[outerMaxContourIndex];
+	Point2 prevPoint;
+	bool firstIter = true;
+	 	
+	/* build polygon out of cv contour */
+	for (const auto& point : outerWallContour)
 	{
-		// only allow triangle capable stuff
-		if (contour.size() < 3) 
-		{
-			++contourIndex;
-			continue;
-		}
+		double toWorldX = origX + (point.x + 0.5) * res;
+		double toWorldY = origY + (point.y + 0.5) * res;
+		Point2 currPoint(toWorldX, toWorldY);
 		
-		Poly2 tmpPoly;
-		Point2 prevPoint;
-		bool firstIter = true;
-		
-		/* build polygon out of cv contour */
-		for (const auto& point : contour)
-		{
-			double toWorldX = origX + (point.x + 0.5) * res;
-			double toWorldY = origY + (point.y + 0.5) * res;
-			Point2 currPoint(toWorldX, toWorldY);
+		// only add non-duplicates
+		if (firstIter || currPoint != prevPoint)
+			outer.push_back(currPoint);
 			
-			// only add non-duplicates
-			if (firstIter || currPoint != prevPoint)
-				tmpPoly.push_back(currPoint);
-			
-			prevPoint = currPoint;
-			firstIter = false;
-		}
-		
-		if (tmpPoly.size() < 3) 
-		{
-			++contourIndex;
-			continue;
-		}  
-		if (*(tmpPoly.vertices_begin()) == *(--tmpPoly.vertices_end()))
-		{
-			tmpPoly.erase(--tmpPoly.vertices_end());
-		}
-		
-		// convert to simple polygon
-		if (!CGAL::is_simple_2(tmpPoly.vertices_begin(), tmpPoly.vertices_end()))
-		{
-			ROS_INFO("Not simple poly! Iteration %d", contourIndex);
-			++contourIndex;
- 			return false;
-		}
-	
-
-		// outer polygon set to CCW
-		if (contourIndex == maxContourIndex) 
-		{
-			if (!tmpPoly.is_counterclockwise_oriented())
-			{
-				tmpPoly.reverse_orientation();
-			}
-			outer = std::move(tmpPoly);
-		}
-		else
-		{
-			// holes set to CW
-			if (tmpPoly.is_counterclockwise_oriented())
-			{
-				tmpPoly.reverse_orientation();				
-			}
-			holes.push_back(std::move(tmpPoly));
-		}
-		++contourIndex;
+		prevPoint = currPoint;
+		firstIter = false;
 	}
+	
+	if (!CGAL::is_simple_2(outer.vertices_begin(), outer.vertices_end()))
+	{
+		ROS_INFO("OUTER WALL: Not simple poly!");
+		return false;
+	}
+	
+	if (!outer.is_counterclockwise_oriented())
+	{
+		outer.reverse_orientation();
+	}
+	
+	/* INNER WALLS */
+	const auto& innerWallContour = innerContours[innerMaxContourIndex];
+	firstIter = true;
+	
+	for (const auto& point : innerWallContour)
+	{
+		double toWorldX = origX + (point.x + 0.5) * res;
+		double toWorldY = origY + (point.y + 0.5) * res;
+		Point2 currPoint(toWorldX, toWorldY);
+		
+		// only add non-duplicates
+		if (firstIter || currPoint != prevPoint)
+			hole.push_back(currPoint);
+			
+		prevPoint = currPoint;
+		firstIter = false;
+	}
+	
+	if (!CGAL::is_simple_2(hole.vertices_begin(), hole.vertices_end()))
+	{
+		ROS_INFO("OUTER WALL: Not simple poly!");
+		return false;
+	}
+	
+	if (!hole.is_counterclockwise_oriented())
+	{
+		hole.reverse_orientation();
+	}
+	
 	return true;
 }
 
-void GeometryPath::BuildCDTPath(std::vector<Point2>& path, const Poly2& outerPoly, const std::vector<Poly2>& holes)
+void GeometryPath::BuildCenterline(std::vector<Point2>& outerLinePoints, std::vector<Point2>& innerLinePoints, const Poly2& outerPoly, Poly2& hole, int innerMaxContourIndex)
 {
-	path.clear();
-	if (outerPoly.size() < 3)
+	outerLinePoints.clear();
+	innerLinePoints.clear();
+	
+	if (outerPoly.size() < 3 || !CGAL::is_simple_2(outerPoly.vertices_begin(), outerPoly.vertices_end())) 
 	{
-		ROS_INFO("WARNING: INVALID OUTER WALL");
+		ROS_INFO("INVALID OUTER POLY"); 
 		return;
 	}
 	
-	if (!CGAL::is_simple_2(outerPoly.vertices_begin(), outerPoly.vertices_end()))
+	
+	if (hole.size() < 3 || !CGAL::is_simple_2(hole.vertices_begin(), hole.vertices_end()))
 	{
-		ROS_INFO("skip, outer wall not simple");
+		ROS_INFO("INVALID HOLE");
 		return;
 	}
 	
-	/* DELAUNAY */
-	CDT cdt;
 	
-	/* define outer wall constraint */
-	cdt.insert_constraint(outerPoly.vertices_begin(), outerPoly.vertices_end(), true);
+	/* CREATE SKELETONS FOR OUTER LINE AND INNER LINE GEOMETRY */
+	SsPtr outerSS = CGAL::create_interior_straight_skeleton_2(outerPoly.vertices_begin(), outerPoly.vertices_end());
 	
-	/* define inner wall constraint */
-	for (const auto& hole : holes)
+	SsPtr innerSS = CGAL::create_interior_straight_skeleton_2(hole.vertices_begin(), hole.vertices_end());
+	
+	
+	if (!outerSS || !innerSS) 
 	{
-		if (hole.size() >= 3)
-			cdt.insert_constraint(hole.vertices_begin(), hole.vertices_end(), true);
-		else 
-		{
-			ROS_INFO("INVALID HOLE");
-			return;
-		}
-		if (!CGAL::is_simple_2(hole.vertices_begin(), hole.vertices_end()))
-		{
-			ROS_INFO("non simple HOLE");
-			return;
-		}
-			
+		ROS_INFO("NO SKELETON!! FAILED");
+		return;
 	}
 	
-	// CGAL::mark_domain_in_triangulation(cdt);
+	/* EXTRACT OUTER AND INNER LINES */
+	std::vector<boost::shared_ptr<Poly2> > outerLines, innerLines;
 	
-	/* graph connecting traingle centers -> Each node (face) has a std::set of neighboring faces */
-	std::map<CDT::Face_handle, std::set<CDT::Face_handle>> graph; 
-	
-	/* define triangle center points */
-	std::map<CDT::Face_handle, Point2> centers;
-	
-	/* iterating through triangles */
-	for (auto face = cdt.finite_faces_begin(); face != cdt.finite_faces_end(); ++face)
+	try
 	{
-		// vertices of triangle face 
-		Point2 a = face->vertex(0)->point();
-		Point2 b = face->vertex(1)->point();
-		Point2 c = face->vertex(2)->point();
-		
-		Point2 center = CGAL::centroid(a, b, c);
-		
-		// test if point is within outer wall
-		if (outerPoly.bounded_side(center) != CGAL::ON_BOUNDED_SIDE)
-			continue;
-		
-		// test if point is outside all inner walls
-		bool in_hole = false;
-		for (auto const& hole : holes)
-		{
-			if (hole.bounded_side(center) != CGAL::ON_UNBOUNDED_SIDE)
-			{
-				in_hole = true;
-				break;
-			}
-		}
-		if (in_hole) continue;
-		
-		
-		// successfully passed both conditions
-		centers[face] = center; // add to the 'centers' dictionary
+		outerLines = CGAL::create_offset_polygons_2<Poly2>(0.01, *outerSS);
+		innerLines = CGAL::create_offset_polygons_2<Poly2>(0.01, *innerSS);
 		
 	}
-	
-	// Create graph of valid edges
-	for (const auto& center : centers)
+	catch (const CGAL::Precondition_exception& e)
 	{
-		CDT::Face_handle face = center.first;
-		for (int i = 0; i < 3; ++i)
-		{
-			auto neighbor = face->neighbor(i);
-			if (centers.count(neighbor))
-			{
-				graph[face].insert(neighbor);
-			}
-		}
+		ROS_INFO("precondition error");
+		return;
+	}
+	if (outerLines.empty() || innerLines.empty())
+	{
+		ROS_INFO("NO VALID OUTER LINES!! FAILED");
+		return;
+	}
+	else if (innerLines.empty())
+	{
+		ROS_INFO("NO VALID INNER LINES!! FAILED");
+		return;
 	}
 	
-	// Convert graph to path 
-	for (const auto& g : graph)
+	/* COPY RELEVANT DATA */
+	auto outerLine = outerLines[0];
+	auto innerLine = innerLines[0];
+	
+	// assuming the first line is the outer line
+	for (auto vertex = outerLine->vertices_begin(); vertex != outerLine->vertices_end(); ++vertex)
 	{
-		auto face = g.first;
-		const auto& neighbors = g.second;
-		
-		for (const auto& n : neighbors)
-		{
-			path.push_back(centers.at(face));
-			path.push_back(centers.at(n));
-		}
+		outerLinePoints.push_back(*vertex);
 	}
-}
-
-// void GeometryPath::BuildSkeleton(SCGAL_Ptr& ss, std::set<Point2>& vertices)
-// {
-// 	for (auto h = ss->halfedges_begin(); h != ss->halfedges_end(); ++h)
-//	{
-//		if (h->is_bisector())
-//		{
-//			vertices.insert(h->vertex()->point());
-//			vertices.insert(h->opposite()->vertex()->point());
-//		}
-//	}
-// }
-
-/*
- NO LONGER IN USE
-static std::vector<Point2> ExtractLongestSkeletonPath(SCGAL_Ptr& ss)
-{
-    std::map<Point2, std::vector<Point2>> graph;
-    std::set<Point2> vertices;    for (auto h = ss->halfedges_begin(); h != ss->halfedges_end(); ++h)
-    {
-        if (!h->is_bisector()) continue;        Point2 src = h->vertex()->point();
-        Point2 dst = h->opposite()->vertex()->point();        graph[src].push_back(dst);
-        graph[dst].push_back(src);        vertices.insert(src);
-        vertices.insert(dst);
-    }    if (vertices.empty())
-        return {};    // First BFS to find farthest point from an arbitrary root
-    std::map<Point2, int> dist;
-    std::map<Point2, Point2> parent;
-    std::set<Point2> visited;    Point2 start = *vertices.begin();
-    std::queue<Point2> q;
-    q.push(start);
-    visited.insert(start);
-    dist[start] = 0;    Point2 farthest = start;    while (!q.empty())
-    {
-        Point2 u = q.front(); q.pop();
-        for (const auto& v : graph[u])
-        {
-            if (visited.count(v)) continue;
-            visited.insert(v);
-            parent[v] = u;
-            dist[v] = dist[u] + 1;
-            if (dist[v] > dist[farthest])
-                farthest = v;
-            q.push(v);
-        }
-    }    // Second BFS from farthest point to get the longest path
-    parent.clear();
-    dist.clear();
-    visited.clear();    Point2 root = farthest;
-    q.push(root);
-    visited.insert(root);
-    dist[root] = 0;    Point2 end = root;    while (!q.empty())
-    {
-        Point2 u = q.front(); q.pop();
-        for (const auto& v : graph[u])
-        {
-            if (visited.count(v)) continue;
-            visited.insert(v);
-            parent[v] = u;
-            dist[v] = dist[u] + 1;
-            if (dist[v] > dist[end])
-                end = v;
-            q.push(v);
-        }
-    }    // Reconstruct path from end to root
-    std::vector<Point2> path;
-    for (Point2 p = end; p != root; p = parent[p])
-        path.push_back(p);
-    path.push_back(root);
-    std::reverse(path.begin(), path.end());
-    return path;
-}
-
-*/
-
+	
+	for (auto vertex = innerLine->vertices_begin(); vertex != innerLine->vertices_end(); ++vertex)
+	{
+		innerLinePoints.push_back(*vertex);
+	}
+	
+} 
 
