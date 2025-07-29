@@ -26,6 +26,19 @@
 #include <CGAL/create_offset_polygons_2.h>
 
 
+
+namespace initial 
+{
+
+struct FaceInfo
+{
+	int nest = 0;
+	bool in_domain() const
+	{
+		return nest % 2 == 1;
+	}
+};
+
 /* TYPEDEFS */
 using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 using Point2 = Kernel::Point_2;
@@ -40,18 +53,6 @@ using Fb = CGAL::Constrained_triangulation_face_base_2<Kernel, Fb_info>;
 using Tds = CGAL::Triangulation_data_structure_2<Vb, Fb>;
 using CDT = CGAL::Constrained_Delaunay_triangulation_2<Kernel, Tds>;
 using SsPtr = boost::shared_ptr<CGAL::Straight_skeleton_2<Kernel> >;
-
-namespace initial 
-{
-
-struct FaceInfo
-{
-	int nest = 0;
-	bool in_domain() const
-	{
-		return nest % 2 == 1;
-	}
-};
 
 class GeometryPath
 {

@@ -16,7 +16,7 @@ GeometryPath::GeometryPath(ros::NodeHandle& nh)
 	privateNodeHandle.param("car_width", margin, 0.0);
 	
 	mapSub = nh.subscribe("map", 1, &GeometryPath::MapCallback, this);
-	pathPub = nh.advertise<nav_msgs::Path>("geometry_path", 1, true);
+	pathPub = nh.advertise<nav_msgs::Path>("outer_geometry_path", 1, true);
 	path2Pub = nh.advertise<nav_msgs::Path>("inner_geometry_path", 1, true);
 }
 

@@ -20,7 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 set(OpenCV_DIR "/usr/lib/aarch64-linux-gnu/cmake/opencv4")
-find_package(OpenCV 4.2 REQUIRED)
+find_package(OpenCV 4.2.0 REQUIRED)
 find_package(CGAL REQUIRED)
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 
@@ -145,6 +145,7 @@ include_directories(
 ## The recommended prefix ensures that target names across packages don't collide
 # add_executable(${PROJECT_NAME}_node src/initial_node.cpp)
 add_executable(geometry_path_node src/geometry_path_node.cpp src/geometry_path.cpp) 
+add_executable(racing_line_node src/racing_line_node.cpp src/racing_line_planner.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -166,6 +167,12 @@ target_link_libraries(geometry_path_node
 	${OpenCV_LIBRARIES}
 	${CGAL_LIBRARIES}
 	)
+	
+target_link_libraries(racing_line_node
+	${catkin_LIBRARIES}
+	${CGAL_LIBRARIES}
+	)
+	
 #############
 ## Install ##
 #############
@@ -180,10 +187,6 @@ target_link_libraries(geometry_path_node
 #   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 # )
 
-catkin_install_python(PROGRAMS
-  src/cmdvel_to_vesc.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
 
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
