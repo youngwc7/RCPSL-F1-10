@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   vesc_msgs
   nav_msgs
   cv_bridge
+  angles
 )
 
 ## System dependencies are found with CMake's conventions
@@ -146,6 +147,7 @@ include_directories(
 # add_executable(${PROJECT_NAME}_node src/initial_node.cpp)
 add_executable(geometry_path_node src/geometry_path_node.cpp src/geometry_path.cpp) 
 add_executable(racing_line_node src/racing_line_node.cpp src/racing_line_planner.cpp)
+add_executable(f1_controller_node src/f1_controller_node.cpp src/f1_controller.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -171,6 +173,10 @@ target_link_libraries(geometry_path_node
 target_link_libraries(racing_line_node
 	${catkin_LIBRARIES}
 	${CGAL_LIBRARIES}
+	)
+	
+target_link_libraries(f1_controller_node
+	${catkin_LIBRARIES}
 	)
 	
 #############

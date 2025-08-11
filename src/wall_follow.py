@@ -50,10 +50,10 @@ class WallFollowNode:
         self.prev_time = None
 
         # Velocity limits
-        self.straight_vel = 0.6
+        self.straight_vel = 0.60
         self.low_turn_vel = 0.40
         self.med_turn_vel = 0.30
-        self.high_turn_vel = 0.25
+        self.high_turn_vel = 0.27
 
         self.drive_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
         self.scan_sub = rospy.Subscriber("/scan", LaserScan, self.scan_callback)
@@ -192,7 +192,7 @@ class WallFollowNode:
         
         end_exec_time = rospy.Time.now()
         
-        rospy.loginfo("EXEC_TIME: %.5f", (end_exec_time - start_exec_time).to_sec())
+        # rospy.loginfo("EXEC_TIME: %.5f", (end_exec_time - start_exec_time).to_sec())
 
 
 if __name__ == "__main__":
